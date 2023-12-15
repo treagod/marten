@@ -93,10 +93,13 @@ module Marten
       end
 
       private def get_expected_token(request)
-        # TODO: add support for session-based CSRF tokens.
-
+        puts "lol"
         token = begin
-          request.cookies[Marten.settings.csrf.cookie_name]
+          if Marten.settings.csrf.use_session
+            request.session[Marten.settings.csrf.cookie_name]
+          else
+            request.cookies[Marten.settings.csrf.cookie_name]
+          end
         rescue KeyError
           return
         end
@@ -141,15 +144,21 @@ module Marten
 
       private def persist_new_csrf_token
         return unless csrf_token && csrf_token_update_required
-        response!.cookies.set(
-          name: Marten.settings.csrf.cookie_name,
-          value: csrf_token,
-          expires: Time.local + Time::Span.new(seconds: Marten.settings.csrf.cookie_max_age),
-          domain: Marten.settings.csrf.cookie_domain,
-          secure: Marten.settings.csrf.cookie_secure,
-          http_only: Marten.settings.csrf.cookie_http_only,
-          same_site: Marten.settings.csrf.cookie_same_site
-        )
+
+        if Marten.settings.csrf.use_session
+          puts "aasd"
+          request.session[Marten.settings.csrf.cookie_name] = csrf_token.not_nil!
+        else
+          response!.cookies.set(
+            name: Marten.settings.csrf.cookie_name,
+            value: csrf_token,
+            expires: Time.local + Time::Span.new(seconds: Marten.settings.csrf.cookie_max_age),
+            domain: Marten.settings.csrf.cookie_domain,
+            secure: Marten.settings.csrf.cookie_secure,
+            http_only: Marten.settings.csrf.cookie_http_only,
+            same_site: Marten.settings.csrf.cookie_same_site
+          )
+        end
       end
 
       private def protect_from_forgery

@@ -98,8 +98,8 @@ module Marten
         end
 
         # Returns the number of records that are targeted by the current query set.
-        def count
-          @result_cache.nil? ? @query.count : @result_cache.not_nil!.size
+        def count(field : String | Symbol | Nil = nil)
+          @result_cache.nil? || !field.nil? ? @query.count(field.try(&.to_s)) : @result_cache.not_nil!.size
         end
 
         # Creates a model instance and saves it to the database if it is valid.
@@ -189,13 +189,17 @@ module Marten
 
           qs = clone
 
-          if raw
-            qs.query.raw_delete
-          else
-            deletion = Deletion::Runner.new(qs.query.connection)
-            deletion.add(qs)
-            deletion.execute
-          end
+          deleted_count = if raw
+                            qs.query.raw_delete
+                          else
+                            deletion = Deletion::Runner.new(qs.query.connection)
+                            deletion.add(qs)
+                            deletion.execute
+                          end
+
+          reset_result_cache
+
+          deleted_count
         end
 
         # Returns a new query set that will use SELECT DISTINCT in its query.
@@ -594,10 +598,9 @@ module Marten
 
         # Returns a queryset whose specified `relations` are "followed" and joined to each result.
         #
-        # When using `#join`, the specified foreign-key relationships will be followed and each record returned by the
-        # queryset will have the corresponding related objects already selected and populated. Using `#join` can result
-        # in performance improvements since it can help reduce the number of SQL queries, as illustrated by the
-        # following example:
+        # When using `#join`, the specified relationships will be followed and each record returned by the queryset will
+        # have the corresponding related objects already selected and populated. Using `#join` can result in performance
+        # improvements since it can help reduce the number of SQL queries, as illustrated by the following example:
         #
         # ```
         # query_set = Post.all
@@ -757,6 +760,18 @@ module Marten
           pick(fields).not_nil!
         end
 
+        # Returns the primary key values of the considered model records targeted by the current query set.
+        #
+        # This method returns an array containing the primary key values of the model records that are targeted by the
+        # current query set. For example:
+        #
+        # ```
+        # Post.all.pks # => [1, 2, 3]
+        # ```
+        def pks
+          pluck(:pk).map(&.first)
+        end
+
         # Returns specific column values without loading entire record objects.
         #
         # This method allows to easily select specific column values from the current query set. This allows retrieving
@@ -899,14 +914,18 @@ module Marten
         # ```
         #
         # It should be noted that this methods results in a regular `UPDATE` SQL statement. As such, the records that
-        # are updated through  the use of this method won't be validated, and no callbacks will be executed for them
+        # are updated through the use of this method won't be validated, and no callbacks will be executed for them
         # either.
         def update(values : Hash | NamedTuple)
           update_hash = Hash(String | Symbol, Field::Any | DB::Model).new
           update_hash.merge!(values.to_h)
 
           qs = clone
-          qs.query.update_with(update_hash)
+          updated_count = qs.query.update_with(update_hash)
+
+          reset_result_cache
+
+          updated_count
         end
 
         # Updates all the records matched by the current query set with the passed values.
@@ -920,16 +939,16 @@ module Marten
         # ```
         #
         # It should be noted that this methods results in a regular `UPDATE` SQL statement. As such, the records that
-        # are updated through  the use of this method won't be validated, and no callbacks will be executed for them
+        # are updated through the use of this method won't be validated, and no callbacks will be executed for them
         # either.
         def update(**kwargs)
           update(kwargs.to_h)
         end
 
         # Allows to define which database alias should be used when evaluating the query set.
-        def using(db : String | Symbol)
+        def using(db : Nil | String | Symbol)
           qs = clone
-          qs.query.using = db.to_s
+          qs.query.using = db.try(&.to_s)
           qs
         end
 
@@ -963,6 +982,10 @@ module Marten
 
         private def raise_negative_indexes_not_supported
           raise Errors::UnmetQuerySetCondition.new("Negative indexes are not supported")
+        end
+
+        private def reset_result_cache
+          @result_cache = nil
         end
       end
     end

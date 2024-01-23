@@ -9,6 +9,7 @@ module Marten
 
         @app_label : String? = nil
         @email_name = ""
+        @parent : String? = nil
 
         def setup
           command.on_argument(:name, "Name of the email to generate (must be CamelCase)") do |v|
@@ -22,11 +23,19 @@ module Marten
           ) do |v|
             @app_label = v
           end
+
+          command.on_option_with_arg(
+            :parent,
+            arg: "parent",
+            description: "Parent class name for the generated email"
+          ) do |v|
+            @parent = v
+          end
         end
 
         def run : Nil
           # Fetch the specified app or default to the main one.
-          app_config = (l = app_label).nil? ? Marten.apps.default : Marten.apps.get(l)
+          app_config = (l = app_label).nil? ? Marten.apps.main : Marten.apps.get(l)
 
           # Validate the email name.
           if email_name.empty?
@@ -42,7 +51,7 @@ module Marten
 
           # Generate the email.
           print_generation_message(app_config, email_name)
-          context = Context.new(app_config, email_name)
+          context = Context.new(app_config, email_name, parent)
           create_app_files(app_config, Templates.app_files(context))
         rescue e : Apps::Errors::AppNotFound
           command.print_error_and_exit(e.message)
@@ -50,6 +59,7 @@ module Marten
 
         private getter app_label
         private getter email_name
+        private getter parent
 
         private setter email_name
 

@@ -35,6 +35,20 @@ module Marten
             end
           end
 
+          def show_usage
+            if !(g = generator).nil?
+              super
+
+              if !g.class.footer_description.nil?
+                print("\n")
+                print(g.class.footer_description.to_s)
+              end
+            else
+              super
+              show_available_generators
+            end
+          end
+
           def run
             if generator_name.nil?
               show_usage
@@ -46,6 +60,7 @@ module Marten
             end
 
             generator!.run
+            generator!.print_warnings
           end
 
           private GENERATOR_ARGUMENT_NAME = "generator"
@@ -53,44 +68,36 @@ module Marten
           private getter generator
           private getter generator_name
 
-          private def banner_parts
-            banner_parts = [] of String
-
+          private def banner_argument_descriptions
             if generator.nil?
-              effective_command_name = "gen"
-              effective_help = self.class.help
-              effective_argument_handlers = argument_handlers
-              effective_argument_descriptions = argument_descriptions
+              argument_descriptions
             else
-              effective_command_name = "gen #{generator!.class.generator_name}"
-              effective_help = generator!.class.help
-              effective_argument_handlers = argument_handlers.reject { |h| h.name == GENERATOR_ARGUMENT_NAME }
-              effective_argument_descriptions = argument_descriptions.reject { |k, _| k == GENERATOR_ARGUMENT_NAME }
+              argument_descriptions.reject { |k, _| k == GENERATOR_ARGUMENT_NAME }
             end
+          end
 
-            banner_parts << "Usage: #{@main_command_name} #{effective_command_name} [options]"
-            unless effective_argument_handlers.empty?
-              arguments_line = " #{effective_argument_handlers.join(" ") { |h| "[#{h.name}]" }}"
-              if !unknown_args_proc.nil?
-                arguments_line += " [arguments]"
-              end
-
-              banner_parts << arguments_line
+          private def banner_argument_handlers
+            if generator.nil?
+              argument_handlers
+            else
+              argument_handlers.reject { |h| h.name == GENERATOR_ARGUMENT_NAME }
             end
+          end
 
-            banner_parts << "\n\n"
-
-            banner_parts << "#{effective_help}\n\n" unless effective_help.empty?
-
-            unless effective_argument_descriptions.empty?
-              banner_parts << "Arguments:\n"
-              banner_parts << effective_argument_descriptions
-                .map { |n, d| format_argument_name_and_description(n, d) }
-                .join("\n")
-              banner_parts << "\n\n"
+          private def banner_command_name
+            if generator.nil?
+              self.class.command_name
+            else
+              "#{self.class.command_name} #{generator!.class.generator_name}"
             end
+          end
 
-            banner_parts << "Options:"
+          private def banner_help
+            if generator.nil?
+              self.class.help
+            else
+              generator!.class.help
+            end
           end
 
           private def generator!
@@ -133,16 +140,6 @@ module Marten
             usage << "marten gen [generator] --help"
 
             print(usage.join(""))
-          end
-
-          private def show_usage
-            if generator.nil?
-              super
-
-              show_available_generators
-            else
-              super
-            end
           end
         end
       end

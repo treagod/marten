@@ -24,15 +24,15 @@ describe Marten::Handlers::Base do
         )
       )
 
-      params_1 = Hash(String, Marten::Routing::Parameter::Types){"id" => 42}
+      params_1 = Marten::Routing::MatchParameters{"id" => 42}
       handler_1 = Marten::Handlers::Base.new(request, params_1)
       handler_1.params.should eq({"id" => 42})
 
-      params_2 = Hash(String, Marten::Routing::Parameter::Types){"slug" => "my-slug"}
+      params_2 = Marten::Routing::MatchParameters{"slug" => "my-slug"}
       handler_2 = Marten::Handlers::Base.new(request, params_2)
       handler_2.params.should eq({"slug" => "my-slug"})
 
-      params_3 = Hash(String, Marten::Routing::Parameter::Types){
+      params_3 = Marten::Routing::MatchParameters{
         "id" => ::UUID.new("a288e10f-fffe-46d1-b71a-436e9190cdc3"),
       }
       handler_3 = Marten::Handlers::Base.new(request, params_3)
@@ -79,6 +79,44 @@ describe Marten::Handlers::Base do
     end
   end
 
+  describe "#context" do
+    it "returns an empty global template context object initialized from configured context producers" do
+      previous_context_producers = Marten.templates.context_producers
+      Marten.templates.context_producers = [
+        Marten::Template::ContextProducer::Request.new,
+      ] of Marten::Template::ContextProducer
+
+      request = Marten::HTTP::Request.new(
+        method: "GET",
+        resource: "",
+        headers: HTTP::Headers{"Host" => "example.com"}
+      )
+      handler = Marten::Handlers::Base.new(request)
+
+      context = handler.context
+
+      context.should be_a Marten::Template::Context
+      context["request"].should eq request
+
+      Marten.templates.context_producers = previous_context_producers
+    end
+
+    it "returns a global template context object that is memoized" do
+      handler = Marten::Handlers::Base.new(
+        Marten::HTTP::Request.new(
+          method: "GET",
+          resource: "",
+          headers: HTTP::Headers{"Host" => "example.com"},
+        )
+      )
+
+      context = handler.context
+
+      context.should be_a Marten::Template::Context
+      handler.context.object_id.should eq context.object_id
+    end
+  end
+
   describe "#request" do
     it "returns the request handled by the handler" do
       request = Marten::HTTP::Request.new(
@@ -102,7 +140,7 @@ describe Marten::Handlers::Base do
           headers: HTTP::Headers{"Host" => "example.com"}
         )
       )
-      params = Hash(String, Marten::Routing::Parameter::Types){"id" => 42}
+      params = Marten::Routing::MatchParameters{"id" => 42}
       handler = Marten::Handlers::Base.new(request, params)
       handler.params.should eq params
     end
@@ -746,6 +784,24 @@ describe Marten::Handlers::Base do
       response.content.strip.should eq "Hello World, John Doe!"
     end
 
+    it "is able to render the template using the global context" do
+      handler = Marten::Handlers::BaseSpec::Test5Handler.new(
+        Marten::HTTP::Request.new(
+          method: "GET",
+          resource: "",
+          headers: HTTP::Headers{"Host" => "example.com"}
+        )
+      )
+
+      handler.context["name"] = "John Doe"
+
+      response = handler.render("specs/handlers/base/test.html")
+
+      response.status.should eq 200
+      response.content_type.should eq "text/html"
+      response.content.strip.should eq "Hello World, John Doe!"
+    end
+
     it "is able to render the template using a context object" do
       request = Marten::HTTP::Request.new(
         ::HTTP::Request.new(
@@ -800,6 +856,23 @@ describe Marten::Handlers::Base do
       response.content.strip.should eq "Hello World, John Doe!"
     end
 
+    it "allows to specify a specific status code as symbol" do
+      request = Marten::HTTP::Request.new(
+        ::HTTP::Request.new(
+          method: "GET",
+          resource: "",
+          headers: HTTP::Headers{"Host" => "example.com"}
+        )
+      )
+
+      handler = Marten::Handlers::BaseSpec::Test5Handler.new(request)
+      response = handler.render("specs/handlers/base/test.html", context: {name: "John Doe"}, status: :not_found)
+
+      response.status.should eq 404
+      response.content_type.should eq "text/html"
+      response.content.strip.should eq "Hello World, John Doe!"
+    end
+
     it "allows to specify a specific content type" do
       request = Marten::HTTP::Request.new(
         ::HTTP::Request.new(
@@ -813,6 +886,75 @@ describe Marten::Handlers::Base do
       response = handler.render(
         "specs/handlers/base/test.html",
         context: {name: "John Doe"},
+        content_type: "text/plain"
+      )
+
+      response.status.should eq 200
+      response.content_type.should eq "text/plain"
+      response.content.strip.should eq "Hello World, John Doe!"
+    end
+
+    it "runs before_render callbacks as expected" do
+      request = Marten::HTTP::Request.new(
+        ::HTTP::Request.new(
+          method: "GET",
+          resource: "",
+          headers: HTTP::Headers{"Host" => "example.com"}
+        )
+      )
+
+      handler = Marten::Handlers::BaseSpec::TestHandlerWithCallbacks.new(request)
+
+      handler.xyz.should be_nil
+
+      response = handler.render(
+        "specs/handlers/base/test.html",
+        context: {name: "John Doe"},
+        content_type: "text/plain"
+      )
+
+      handler.xyz.should eq "set_xyz"
+
+      response.status.should eq 200
+      response.content_type.should eq "text/plain"
+      response.content.strip.should eq "Hello World, John Doe!"
+    end
+
+    it "returns the expected response if the before_render callback returns a custom responses" do
+      request = Marten::HTTP::Request.new(
+        ::HTTP::Request.new(
+          method: "GET",
+          resource: "",
+          headers: HTTP::Headers{"Host" => "example.com"}
+        )
+      )
+
+      handler = Marten::Handlers::BaseSpec::TestHandlerWithBeforeRenderResponse.new(request)
+
+      response = handler.render(
+        "specs/handlers/base/test.html",
+        context: {name: "John Doe"},
+        content_type: "text/plain"
+      )
+
+      response.status.should eq 200
+      response.content_type.should eq "text/plain"
+      response.content.should eq "before_render response"
+    end
+
+    it "returns the expected response if the before_render callback returns a value that is not an HTTP response" do
+      request = Marten::HTTP::Request.new(
+        ::HTTP::Request.new(
+          method: "GET",
+          resource: "",
+          headers: HTTP::Headers{"Host" => "example.com"}
+        )
+      )
+
+      handler = Marten::Handlers::BaseSpec::TestHandlerWithContextBeforeRenderResponse.new(request)
+
+      response = handler.render(
+        "specs/handlers/base/test.html",
         content_type: "text/plain"
       )
 
@@ -966,9 +1108,11 @@ module Marten::Handlers::BaseSpec
 
   class TestHandlerWithCallbacks < Marten::Handlers::Base
     property foo : String? = nil
+    property xyz : String? = nil
     property bar : String? = nil
 
     before_dispatch :set_foo
+    before_render :set_xyz
     after_dispatch :set_bar
 
     def get
@@ -977,6 +1121,10 @@ module Marten::Handlers::BaseSpec
 
     private def set_foo
       self.foo = "set_foo"
+    end
+
+    private def set_xyz
+      self.xyz = "set_xyz"
     end
 
     private def set_bar
@@ -993,6 +1141,23 @@ module Marten::Handlers::BaseSpec
 
     private def return_before_dispatch_response
       Marten::HTTP::Response.new("before_dispatch response", content_type: "text/plain", status: 200)
+    end
+  end
+
+  class TestHandlerWithBeforeRenderResponse < Marten::Handlers::Base
+    before_render :return_before_render_response
+
+    private def return_before_render_response
+      Marten::HTTP::Response.new("before_render response", content_type: "text/plain", status: 200)
+    end
+  end
+
+  class TestHandlerWithContextBeforeRenderResponse < Marten::Handlers::Base
+    before_render :add_context_values
+
+    private def add_context_values
+      context["name"] = "John Doe"
+      "bar"
     end
   end
 

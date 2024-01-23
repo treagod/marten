@@ -1,5 +1,6 @@
-const lightCodeTheme = require('prism-react-renderer/themes/github');
-const darkCodeTheme = require('prism-react-renderer/themes/dracula');
+const {themes} = require('prism-react-renderer');
+const lightTheme = themes.github;
+const darkTheme = themes.dracula;
 
 // With JSDoc @type annotations, IDEs can provide config autocompletion
 /** @type {import('@docusaurus/types').DocusaurusConfig} */
@@ -38,7 +39,7 @@ const darkCodeTheme = require('prism-react-renderer/themes/dracula');
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
-      image: 'img/logo_primary_zoomed_alt_white.png',
+      image: 'img/1000x420_logo.jpg',
       navbar: {
         title: 'Marten',
         logo: {
@@ -71,8 +72,8 @@ const darkCodeTheme = require('prism-react-renderer/themes/dracula');
         hideOnScroll: true,
       },
       prism: {
-        theme: require('prism-react-renderer/themes/okaidia'),
-        additionalLanguages: ['ruby', 'crystal'],
+        theme: themes.okaidia,
+        additionalLanguages: ['ruby', 'crystal', 'bash'],
       },
       algolia: {
         appId: 'EQ32BI3T7E',

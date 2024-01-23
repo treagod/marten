@@ -1,37 +1,37 @@
 require "./spec_helper"
 
 describe Marten::Handlers::Redirect do
-  describe "::forward_query_string" do
+  describe "::forward_query_string?" do
     it "returns false by default" do
-      Marten::Handlers::Redirect.forward_query_string.should be_false
+      Marten::Handlers::Redirect.forward_query_string?.should be_false
     end
 
     it "returns true if explicitely set" do
-      Marten::Handlers::RedirectSpec::HandlerWithQueryStringForwardingEnabled.forward_query_string.should be_true
+      Marten::Handlers::RedirectSpec::HandlerWithQueryStringForwardingEnabled.forward_query_string?.should be_true
     end
   end
 
   describe "::forward_query_string(v)" do
     it "allows to activate or deactivate query string forwarding for the redirection" do
-      Marten::Handlers::RedirectSpec::HandlerWithQueryStringForwardingEnabled.forward_query_string.should be_true
-      Marten::Handlers::RedirectSpec::HandlerWithQueryStringForwardingDisabled.forward_query_string.should be_false
+      Marten::Handlers::RedirectSpec::HandlerWithQueryStringForwardingEnabled.forward_query_string?.should be_true
+      Marten::Handlers::RedirectSpec::HandlerWithQueryStringForwardingDisabled.forward_query_string?.should be_false
     end
   end
 
   describe "::permanent" do
     it "returns false by default" do
-      Marten::Handlers::Redirect.permanent.should be_false
+      Marten::Handlers::Redirect.permanent?.should be_false
     end
 
     it "returns true if explicitely set" do
-      Marten::Handlers::RedirectSpec::PermanentStaticRedirect.permanent.should be_true
+      Marten::Handlers::RedirectSpec::PermanentStaticRedirect.permanent?.should be_true
     end
   end
 
   describe "::permanent(v)" do
     it "allows to activate or deactivate permanent redirections" do
-      Marten::Handlers::RedirectSpec::PermanentStaticRedirect.permanent.should be_true
-      Marten::Handlers::RedirectSpec::TemporaryStaticRedirect.permanent.should be_false
+      Marten::Handlers::RedirectSpec::PermanentStaticRedirect.permanent?.should be_true
+      Marten::Handlers::RedirectSpec::TemporaryStaticRedirect.permanent?.should be_false
     end
   end
 
@@ -111,7 +111,7 @@ describe Marten::Handlers::Redirect do
       request = Marten::HTTP::Request.new(::HTTP::Request.new(method: "GET", resource: "", headers: HTTP::Headers.new))
       handler = Marten::Handlers::RedirectSpec::DynamicRedirectWithParams.new(
         request,
-        Hash(String, Marten::Routing::Parameter::Types){"id" => 42}
+        Marten::Routing::MatchParameters{"id" => 42}
       )
       response = handler.dispatch
       response.status.should eq 302
@@ -128,7 +128,7 @@ describe Marten::Handlers::Redirect do
       )
       handler = Marten::Handlers::RedirectSpec::HandlerWithQueryStringForwardingEnabled.new(
         request,
-        Hash(String, Marten::Routing::Parameter::Types){"id" => 42}
+        Marten::Routing::MatchParameters{"id" => 42}
       )
       response = handler.dispatch
       response.status.should eq 302

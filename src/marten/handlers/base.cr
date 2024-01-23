@@ -21,13 +21,11 @@ module Marten
       include ContentSecurityPolicy
       include XFrameOptions
 
-      # :nodoc:
-      alias ParamsHash = Hash(String, Routing::Parameter::Types)
-
       HTTP_METHOD_NAMES = %w(get post put patch delete head options trace)
 
       @@http_method_names : Array(String) = HTTP_METHOD_NAMES
 
+      @context : Marten::Template::Context? = nil
       @response : HTTP::Response? = nil
 
       # Returns the HTTP method names that are allowed for the handler.
@@ -50,12 +48,20 @@ module Marten
         @@http_method_names = method_names.to_a.map(&.to_s)
       end
 
-      def initialize(@request : HTTP::Request, @params : ParamsHash)
+      def initialize(@request : HTTP::Request, @params : Routing::MatchParameters)
       end
 
       def initialize(@request : HTTP::Request, **kwargs)
-        @params = ParamsHash.new
+        @params = Routing::MatchParameters.new
         kwargs.each { |key, value| @params[key.to_s] = value }
+      end
+
+      # Returns the global template context.
+      #
+      # This context object can be mutated for the lifetime of the handler in order to define which variables will be
+      # made available to the template runtime.
+      def context
+        @context ||= Marten::Template::Context.from(nil, request)
       end
 
       # Triggers the execution of the handler in order to produce an HTTP response.
@@ -125,24 +131,36 @@ module Marten
       end
 
       # Returns an empty response associated with a given status code.
-      def head(status : Int32) : HTTP::Response
-        HTTP::Response.new(content: "", content_type: "", status: status)
+      def head(status : ::HTTP::Status | Int32) : HTTP::Response
+        HTTP::Response.new(
+          content: "",
+          content_type: "",
+          status: ::HTTP::Status.new(status).to_i
+        )
       end
 
       # Returns an HTTP response containing the passed raw JSON string.
       #
       # The response will use the `application/json` content type and the `200` status code (the latest can be set to
       # something else through the use of the `status` argument).
-      def json(raw_json : String, status = 200)
-        HTTP::Response.new(content: raw_json, content_type: "application/json", status: status)
+      def json(raw_json : String, status : ::HTTP::Status | Int32 = 200)
+        HTTP::Response.new(
+          content: raw_json,
+          content_type: "application/json",
+          status: ::HTTP::Status.new(status).to_i
+        )
       end
 
       # Returns an HTTP response containing the passed object serialized as JSON.
       #
       # The response will use the `application/json` content type and the `200` status code (the latest can be set to
       # something else through the use of the `status` argument).
-      def json(serializable, status = 200)
-        HTTP::Response.new(content: serializable.to_json, content_type: "application/json", status: status)
+      def json(serializable, status : ::HTTP::Status | Int32 = 200)
+        HTTP::Response.new(
+          content: serializable.to_json,
+          content_type: "application/json",
+          status: ::HTTP::Status.new(status).to_i
+        )
       end
 
       # Handles an `OPTIONS` HTTP request and returns a `Marten::HTTP::Response` object.
@@ -159,12 +177,14 @@ module Marten
 
       # :nodoc:
       def process_dispatch : Marten::HTTP::Response
-        before_callbacks_response = run_before_dispatch_callbacks
+        before_dispatch_response = run_before_dispatch_callbacks
 
-        @response = before_callbacks_response || dispatch
+        @response = before_dispatch_response.nil? ? dispatch : before_dispatch_response
 
-        after_callbacks_response = run_after_dispatch_callbacks
-        after_callbacks_response || response!
+        after_dispatch_response = run_after_dispatch_callbacks
+        @response = after_dispatch_response if !after_dispatch_response.nil?
+
+        response!
       end
 
       # Returns a redirect HTTP response for a specific `url`.
@@ -183,29 +203,48 @@ module Marten
         template_name : String,
         context : Hash | NamedTuple | Nil | Marten::Template::Context = nil,
         content_type = HTTP::Response::DEFAULT_CONTENT_TYPE,
-        status = 200
+        status : ::HTTP::Status | Int32 = 200
       )
-        template_context = Marten::Template::Context.from(context, request)
-        template_context["handler"] = self
-        HTTP::Response.new(
-          content: Marten.templates.get_template(template_name).render(template_context),
-          content_type: content_type,
-          status: status
-        )
+        self.context.merge(context) unless context.nil?
+        self.context["handler"] = self
+
+        before_render_response = run_before_render_callbacks
+
+        if before_render_response.is_a?(HTTP::Response)
+          before_render_response
+        else
+          HTTP::Response.new(
+            content: Marten.templates.get_template(template_name).render(self.context),
+            content_type: content_type,
+            status: ::HTTP::Status.new(status).to_i
+          )
+        end
       end
 
       # Returns an HTTP response generated from a content string, content type and status code.
-      def respond(content = "", content_type = HTTP::Response::DEFAULT_CONTENT_TYPE, status = 200)
-        HTTP::Response.new(content: content, content_type: content_type, status: status)
+      def respond(
+        content = "",
+        content_type = HTTP::Response::DEFAULT_CONTENT_TYPE,
+        status : ::HTTP::Status | Int32 = 200
+      )
+        HTTP::Response.new(
+          content: content,
+          content_type: content_type,
+          status: ::HTTP::Status.new(status).to_i
+        )
       end
 
       # Returns a streamed HTTP response generated from an iterator of strings, content type and status code.
       def respond(
         streamed_content : Iterator(String),
         content_type = HTTP::Response::DEFAULT_CONTENT_TYPE,
-        status = 200
+        status : ::HTTP::Status | Int32 = 200
       )
-        HTTP::Response::Streaming.new(streamed_content: streamed_content, content_type: content_type, status: status)
+        HTTP::Response::Streaming.new(
+          streamed_content: streamed_content,
+          content_type: content_type,
+          status: ::HTTP::Status.new(status).to_i
+        )
       end
 
       # Same as `#response` but with a nil-safety check.

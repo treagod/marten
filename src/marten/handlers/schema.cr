@@ -34,6 +34,9 @@ module Marten
     class Schema < Template
       include Callbacks
 
+      # Returns the name to use to include the schema object into the template context (defaults to `schema`).
+      class_getter schema_context_name : String = "schema"
+
       # Returns the route name that should be resolved to produce the URL to redirect to when processing a valid schema.
       #
       # Defaults to `nil`.
@@ -43,6 +46,13 @@ module Marten
       #
       # Defaults to `nil`.
       class_getter success_url : String?
+
+      before_render :add_schema_to_context
+
+      # Allows to configure the name to use to include the schema into the template context.
+      def self.schema_context_name(name : String | Symbol)
+        @@schema_context_name = name.to_s
+      end
 
       # Allows to set the route name that should be resolved to produce the URL to when processing a valid schema.
       def self.success_route_name(success_route_name : String?)
@@ -69,29 +79,25 @@ module Marten
         end
       end
 
-      def context
-        Marten::Template::Context{"schema" => schema}
-      end
-
       def initial_data
         Marten::Schema::DataHash.new
       end
 
       def post
-        @response = run_before_validation_callbacks
-        return response! if !@response.nil?
+        callbacks_response = run_before_validation_callbacks
+        return callbacks_response if !callbacks_response.nil?
 
         valid_schema = schema.valid?
 
-        @response ||= run_after_validation_callbacks
-        return response! if !@response.nil?
+        callbacks_response = run_after_validation_callbacks
+        return callbacks_response if !callbacks_response.nil?
 
         if valid_schema
-          @response ||= run_after_successful_validation_callbacks
-          @response ||= process_valid_schema
+          callbacks_response = run_after_successful_validation_callbacks
+          callbacks_response.nil? ? process_valid_schema : callbacks_response
         else
-          @response ||= run_after_failed_validation_callbacks
-          @response ||= process_invalid_schema
+          callbacks_response = run_after_failed_validation_callbacks
+          callbacks_response.nil? ? process_invalid_schema : callbacks_response
         end
       end
 
@@ -138,6 +144,10 @@ module Marten
           "'#{self.class.name}' must define a success route via the '#success_route_name' or '#success_url' class " \
           "method, or by overridding the '#success_url' method"
         )
+      end
+
+      private def add_schema_to_context : Nil
+        context[self.class.schema_context_name] = schema
       end
 
       private def raise_improperly_configured_schema

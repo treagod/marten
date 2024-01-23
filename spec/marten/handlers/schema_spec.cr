@@ -1,7 +1,23 @@
 require "./spec_helper"
-require "./schema_spec/**"
 
 describe Marten::Handlers::Schema do
+  describe "::schema_context_name" do
+    it "returns the expected value by default" do
+      Marten::Handlers::SchemaSpec::TestHandler.schema_context_name.should eq "schema"
+    end
+
+    it "returns the specified value" do
+      Marten::Handlers::SchemaSpec::TestWithCustomSchemaContextName.schema_context_name.should eq "my_schema"
+    end
+  end
+
+  describe "::schema_context_name(name)" do
+    it "allows to specify the schema context name" do
+      Marten::Handlers::SchemaSpec::TestWithCustomSchemaContextName.schema_context_name("my_schema")
+      Marten::Handlers::SchemaSpec::TestWithCustomSchemaContextName.schema_context_name.should eq "my_schema"
+    end
+  end
+
   describe "::success_route_name" do
     it "returns the configured success URL" do
       Marten::Handlers::SchemaSpec::TestHandler.success_route_name.should eq "dummy"
@@ -22,8 +38,8 @@ describe Marten::Handlers::Schema do
     end
   end
 
-  describe "#context" do
-    it "includes the schema instance without data if the request does not provide data" do
+  describe "#render_to_response" do
+    it "includes the schema instance without data in the global context if the request does not provide data" do
       request = Marten::HTTP::Request.new(
         ::HTTP::Request.new(
           method: "GET",
@@ -33,13 +49,15 @@ describe Marten::Handlers::Schema do
       )
       handler = Marten::Handlers::SchemaSpec::TestHandler.new(request)
 
+      handler.render_to_response(context: nil)
+
       handler.context["schema"].raw.should be_a Marten::Handlers::SchemaSpec::TestSchema
       schema = handler.context["schema"].raw.as(Marten::Schema)
       schema["foo"].value.should be_nil
       schema["bar"].value.should be_nil
     end
 
-    it "includes the schema instance with data if the request provides data" do
+    it "includes the schema instance with data in the global context if the request provides data" do
       request = Marten::HTTP::Request.new(
         ::HTTP::Request.new(
           method: "POST",
@@ -49,6 +67,8 @@ describe Marten::Handlers::Schema do
         )
       )
       handler = Marten::Handlers::SchemaSpec::TestHandler.new(request)
+
+      handler.render_to_response(context: nil)
 
       handler.context["schema"].raw.should be_a Marten::Handlers::SchemaSpec::TestSchema
       schema = handler.context["schema"].raw.as(Marten::Schema)
@@ -523,5 +543,10 @@ module Marten::Handlers::SchemaSpec
   end
 
   class TestHandlerWithoutConfiguration < Marten::Handlers::Schema
+  end
+
+  class TestWithCustomSchemaContextName < Marten::Handlers::Schema
+    schema TestSchema
+    schema_context_name "my_schema"
   end
 end

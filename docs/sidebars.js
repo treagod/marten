@@ -154,11 +154,13 @@ module.exports = {
         'development/settings',
         'development/applications',
         'development/management-commands',
+        'development/generators',
         'development/testing',
         {
           type: 'category',
           label: "How-To's",
           items: [
+            'development/how-to/configure-database-backends',
             'development/how-to/create-custom-commands',
           ],
         },
@@ -168,6 +170,7 @@ module.exports = {
           items: [
             'development/reference/settings',
             'development/reference/management-commands',
+            'development/reference/generators',
           ],
         },
       ],
@@ -197,6 +200,7 @@ module.exports = {
       link: {type: 'doc', id: 'emailing'},
       items: [
         'emailing/introduction',
+        'emailing/callbacks',
         {
           type: 'category',
           label: "How-To's",
@@ -296,7 +300,10 @@ module.exports = {
             'the-marten-project/release-notes/0.3',
             'the-marten-project/release-notes/0.3.1',
             'the-marten-project/release-notes/0.3.2',
+            'the-marten-project/release-notes/0.3.3',
+            'the-marten-project/release-notes/0.3.4',
             'the-marten-project/release-notes/0.4',
+            'the-marten-project/release-notes/0.5',
           ],
         },
       ],

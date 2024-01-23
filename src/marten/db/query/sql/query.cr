@@ -43,6 +43,7 @@ module Marten
             @limit : Int64?,
             @offset : Int64?,
             @order_clauses : Array({String, Bool}),
+            @parent_model_joins : Array(Join)?,
             @predicate_node : PredicateNode?,
             @using : String?
           )
@@ -55,11 +56,16 @@ module Marten
           end
 
           def add_selected_join(relation : String) : Nil
-            field_path = verify_field(relation, only_relations: true, allow_reverse_relations: false)
+            field_path = verify_field(relation, only_relations: true, allow_many: false)
 
             # Special case: if the last model makes use of multi table inheritance, we have to ensure that the parent
             # models are retrieved as well in order to ensure that the joined records can properly be instantiated.
-            child_model = field_path.last[0].related_model
+
+            child_model = if (reverse_relation = field_path.last[1]).nil?
+                            field_path.last[0].related_model
+                          else
+                            reverse_relation.model
+                          end
 
             if !child_model.nil? && child_model.pk_field.relation? && !child_model.parent_models.empty?
               field_path += construct_inheritance_field_path(child_model, child_model.parent_models.last)
@@ -77,6 +83,7 @@ module Marten
               limit: @limit,
               offset: @offset,
               order_clauses: @order_clauses,
+              parent_model_joins: @parent_model_joins,
               predicate_node: @predicate_node.nil? ? nil : @predicate_node.clone,
               using: @using
             )
@@ -86,8 +93,12 @@ module Marten
             @using.nil? ? Model.connection : Connection.get(@using.not_nil!)
           end
 
-          def count
-            sql, parameters = build_count_query
+          def count(raw_field : String? = nil)
+            column_name = if !raw_field.nil?
+                            solve_field_and_column(raw_field).last
+                          end
+
+            sql, parameters = build_count_query(column_name)
             connection.open do |db|
               result = db.scalar(sql, args: parameters)
               result.to_s.to_i
@@ -120,18 +131,8 @@ module Marten
             fields.map(&.to_s).each do |raw_field|
               reversed = raw_field.starts_with?('-')
               raw_field = raw_field[1..] if reversed
-
-              field_path = verify_field(raw_field)
-              relation_field_path = field_path.select { |field, _r| field.relation? }
-
-              if relation_field_path.empty? || field_path.size == 1
-                column = "#{Model.db_table}.#{field_path.first[0].db_column!}"
-              else
-                join = ensure_join_for_field_path(relation_field_path)
-                column = join.not_nil!.column_name(field_path.last[0].db_column!)
-              end
-
-              order_clauses << {column, reversed}
+              _, column_name = solve_field_and_column(raw_field)
+              order_clauses << {column_name, reversed}
             end
 
             @order_clauses = order_clauses
@@ -142,7 +143,7 @@ module Marten
           end
 
           def pluck(fields : Array(String)) : Array(Array(Field::Any))
-            plucked_columns = solve_plucked_columns(fields)
+            plucked_columns = solve_plucked_fields_and_columns(fields)
             execute_pluck_query(*build_pluck_query(plucked_columns), plucked_columns)
           end
 
@@ -161,17 +162,7 @@ module Marten
 
             if !fields.nil?
               fields.each do |raw_field|
-                field_path = verify_field(raw_field)
-                relation_field_path = field_path.select { |field, _r| field.relation? }
-
-                if relation_field_path.empty? || field_path.size == 1
-                  column = "#{Model.db_table}.#{field_path.first[0].db_column!}"
-                else
-                  join = ensure_join_for_field_path(relation_field_path)
-                  column = join.not_nil!.column_name(field_path.last[0].db_column!)
-                end
-
-                distinct_columns << column
+                distinct_columns << solve_field_and_column(raw_field).last
               end
             end
 
@@ -216,6 +207,7 @@ module Marten
               limit: @limit,
               offset: @offset,
               order_clauses: @order_clauses,
+              parent_model_joins: @parent_model_joins,
               predicate_node: @predicate_node.nil? ? nil : @predicate_node.clone,
               using: @using
             )
@@ -254,7 +246,7 @@ module Marten
             # making use of multi table inheritance), then we have to fetch the IDs of the targeted records in order to
             # be able to update the related models as well.
             if !related_values_to_update.empty?
-              related_plucked_pk_columns = solve_plucked_columns([Model.pk_field.id])
+              related_plucked_pk_columns = solve_plucked_fields_and_columns([Model.pk_field.id])
               related_pks = execute_pluck_query(
                 *build_pluck_query(related_plucked_pk_columns),
                 related_plucked_pk_columns
@@ -286,21 +278,23 @@ module Marten
             rows_affected.not_nil!
           end
 
-          private def build_count_query
+          private def build_count_query(column_name : String?)
             where, parameters = where_clause_and_parameters
             limit = connection.limit_value(@limit)
 
             sql = build_sql do |s|
-              s << "SELECT COUNT(*)"
+              s << "SELECT COUNT(#{column_name ? column_name.split(".")[-1] : '*'})"
               s << "FROM ("
               s << "SELECT"
 
               if distinct
                 s << connection.distinct_clause_for(distinct_columns)
-                s << columns
-              else
+                s << columns if column_name.nil?
+              elsif column_name.nil?
                 s << "#{Model.db_table}.#{Model.pk_field.db_column!}"
               end
+
+              s << column_name unless column_name.nil?
 
               s << "FROM #{table_name}"
               s << build_joins
@@ -365,8 +359,7 @@ module Marten
             String.build do |s|
               # Note: the order in which joins are generated is important because parent model joins are read in order
               # and before any other additional joins.
-              s << parent_model_joins.join(" ", &.to_sql)
-              s << @joins.join(" ", &.to_sql)
+              s << (parent_model_joins + @joins).join(" ", &.to_sql)
             end
           end
 
@@ -485,10 +478,34 @@ module Marten
             parent_join = nil
 
             field_path.each do |field, reverse_relation|
-              from_model = model
-              from_common_field = reverse_relation.nil? ? field : model.pk_field
-              to_model = reverse_relation.nil? ? field.related_model : reverse_relation.model
-              to_common_field = reverse_relation.nil? ? field.related_model.pk_field : field
+              if field.is_a?(Field::ManyToMany)
+                # If we are considering a many-to-many field, we first have to create a join that goes through the
+                # through model.
+                through_join = Join.new(
+                  id: (flattened_parent_model_joins + flattened_joins).size + 1,
+                  type: JoinType::INNER,
+                  from_model: model,
+                  from_common_field: model.pk_field,
+                  reverse_relation: nil,
+                  to_model: field.through,
+                  to_common_field: reverse_relation.nil? ? field.through_from_field : field.through_to_field,
+                  selected: false
+                )
+                through_join.parent = parent_join if !parent_join.nil?
+
+                parent_join = through_join
+                @joins << parent_join
+
+                from_model = field.through
+                from_common_field = reverse_relation.nil? ? field.through_to_field : field.through_from_field
+                to_model = reverse_relation.nil? ? field.related_model : reverse_relation.model
+                to_common_field = reverse_relation.nil? ? field.related_model.pk_field : reverse_relation.model.pk_field
+              else
+                from_model = model
+                from_common_field = reverse_relation.nil? ? field : model.pk_field
+                to_model = reverse_relation.nil? ? field.related_model : reverse_relation.model
+                to_common_field = reverse_relation.nil? ? field.related_model.pk_field : field
+              end
 
               all_joins = flattened_parent_model_joins + flattened_joins
 
@@ -507,12 +524,20 @@ module Marten
                   type: field.null? || !reverse_relation.nil? ? JoinType::LEFT_OUTER : JoinType::INNER,
                   from_model: from_model,
                   from_common_field: from_common_field,
+                  reverse_relation: reverse_relation,
                   to_model: to_model,
                   to_common_field: to_common_field,
-                  selected: selected && reverse_relation.nil?
+                  selected: selected
                 )
 
                 if parent_join.nil?
+                  # No parent join means that we must add the join to the top-level joins.
+                  @joins << join
+                elsif flattened_parent_model_joins.includes?(parent_join)
+                  # If the parent join is a parent model join, we must add the join to the top-level joins as well while
+                  # ensuring that the parent join is correctly set. This is because the columns that are associated to
+                  # parent model joins are always selected (and read) before the columns of other joins.
+                  join.parent = parent_join
                   @joins << join
                 else
                   parent_join.add_child(join)
@@ -568,17 +593,43 @@ module Marten
             get_field_context(raw_field, model).field
           end
 
-          private def get_field_context(raw_field, model)
-            model.get_field_context(raw_field.to_s)
-          rescue Errors::UnknownField
-            raise_invalid_field_error_with_valid_choices(raw_field, model)
+          private def get_field_context(raw_field, model, allow_many = true)
+            field_context = begin
+              model.get_field_context(raw_field.to_s)
+            rescue Errors::UnknownField
+              raise_invalid_field_error_with_valid_choices(raw_field, model, allow_many: allow_many)
+            end
+
+            if !allow_many && field_context.field.is_a?(Field::ManyToMany)
+              raise_invalid_field_error_with_valid_choices(raw_field, model, allow_many: allow_many)
+            end
+
+            field_context
           end
 
-          private def get_relation_field_context(raw_relation, model, silent = false)
-            model.get_relation_field_context(raw_relation.to_s)
-          rescue Errors::UnknownField
-            return nil if silent
-            raise_invalid_field_error_with_valid_choices(raw_relation, model, "relation field")
+          private def get_relation_field_context(raw_relation, model, allow_many = true, silent = false)
+            field_context = begin
+              model.get_relation_field_context(raw_relation.to_s)
+            rescue Errors::UnknownField
+              return nil if silent
+              raise_invalid_field_error_with_valid_choices(
+                raw_relation,
+                model,
+                "relation field",
+                allow_many: allow_many
+              )
+            end
+
+            if !allow_many && field_context.field.is_a?(Field::ManyToMany)
+              raise_invalid_field_error_with_valid_choices(
+                raw_relation,
+                model,
+                field_type: "relation field",
+                allow_many: allow_many
+              )
+            end
+
+            field_context
           end
 
           private def order_by
@@ -598,6 +649,7 @@ module Marten
                   type: JoinType::INNER,
                   from_model: previous_model,
                   from_common_field: previous_model.pk_field,
+                  reverse_relation: nil,
                   to_model: parent_model,
                   to_common_field: parent_model.pk_field,
                   selected: true,
@@ -635,11 +687,46 @@ module Marten
             predicate_node
           end
 
-          private def raise_invalid_field_error_with_valid_choices(raw_field, model, field_type = "field")
-            valid_choices = model.fields.join(", ", &.id)
+          private def raise_invalid_field_error_with_valid_choices(
+            raw_field,
+            model,
+            field_type = "field",
+            allow_many = true
+          )
+            fields = model.fields
+            fields = fields.reject(Field::ManyToMany) if !allow_many
+
             raise Errors::InvalidField.new(
-              "Unable to resolve '#{raw_field}' as a #{field_type}. Valid choices are: #{valid_choices}."
+              "Unable to resolve '#{raw_field}' as a #{field_type}. Valid choices are: #{fields.join(", ", &.id)}."
             )
+          end
+
+          private def solve_field_and_column(raw_field)
+            field_path = verify_field(raw_field.to_s, allow_many: false)
+            relation_field_path = field_path.select { |field, _r| field.relation? }
+
+            if relation_field_path.empty? || (field_path.size == 1 && field_path.last[1].nil?)
+              # If we are not considering a relation field or if we are considering a direct relationship (eg. a
+              # many-to-one or one-to-one field), then we can assume that the column is available on the current model.
+              field = field_path.first[0]
+              column = "#{Model.db_table}.#{field_path.first[0].db_column!}"
+            else
+              # If we are going through a relation field (or a reverse relation), we have to ensure that the necessary
+              # joins are created in order to be able to access the targeted column.
+              join = ensure_join_for_field_path(relation_field_path)
+
+              # If the last field accessed is a reverse relation, we have to use the primary key of the related model as
+              # the targeted field.
+              field = if !(reverse_relation = field_path.last[1]).nil?
+                        reverse_relation.model.pk_field
+                      else
+                        field_path.last[0]
+                      end
+
+              column = join.not_nil!.column_name(field.db_column!)
+            end
+
+            {field, column}
           end
 
           private def solve_field_and_predicate(raw_query, raw_value)
@@ -687,21 +774,9 @@ module Marten
             predicate_klass.new(field, value, alias_prefix: join.nil? ? Model.db_table : join.table_alias)
           end
 
-          private def solve_plucked_columns(fields)
+          private def solve_plucked_fields_and_columns(fields)
             fields.each_with_object([] of Tuple(Field::Base, String)) do |raw_field, plucked_columns|
-              field_path = verify_field(raw_field)
-              relation_field_path = field_path.select { |field, _r| field.relation? }
-
-              if relation_field_path.empty? || field_path.size == 1
-                field = field_path.first[0]
-                column = "#{Model.db_table}.#{field.db_column!}"
-              else
-                join = ensure_join_for_field_path(relation_field_path)
-                field = field_path.last[0]
-                column = join.not_nil!.column_name(field.db_column!)
-              end
-
-              plucked_columns << {field, column}
+              plucked_columns << solve_field_and_column(raw_field)
             end
           end
 
@@ -709,7 +784,7 @@ module Marten
             quote(Model.db_table)
           end
 
-          private def verify_field(raw_field, only_relations = false, allow_reverse_relations = true)
+          private def verify_field(raw_field, only_relations = false, allow_many = true)
             field_path = [] of Tuple(Field::Base, Nil | ReverseRelation)
 
             current_model = Model
@@ -733,16 +808,19 @@ module Marten
 
               field_context = begin
                 if only_relations
-                  get_relation_field_context(part, current_model)
+                  get_relation_field_context(part, current_model, allow_many: allow_many)
                 else
-                  get_field_context(part, current_model)
+                  get_field_context(part, current_model, allow_many: allow_many)
                 end
               rescue e : Errors::InvalidField
-                raise e unless allow_reverse_relations
-
                 reverse_relation_context = current_model.get_reverse_relation_context(part.to_s)
 
-                if reverse_relation_context.nil?
+                # If allow_many is set to false, we have to ensure that the reverse relation is a one-to-one relation.
+                if reverse_relation_context.nil? || (
+                     !reverse_relation_context.nil? &&
+                     !allow_many &&
+                     !reverse_relation_context.reverse_relation.one_to_one?
+                   )
                   raise e
                 else
                   reverse_relation_context.reverse_relation.model.get_field_context(

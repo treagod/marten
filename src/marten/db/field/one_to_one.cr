@@ -197,17 +197,18 @@ module Marten
               class ::{{ model_klass }}
                 macro finished
                   class ::{{ related_model_klass }}
-                    @[Marten::DB::Model::Table::ReverseRelationInstanceVariable(
-                      reverse_relation_name: {{ related_field_name.id }}
+                    @[Marten::DB::Model::Table::RelationInstanceVariable(
+                      relation_name: {{ related_field_name.id }},
+                      related_model: {{ model_klass }},
                     )]
-                    @_reverse_relation_{{ related_field_name.id }} : {{ model_klass }}?
+                    @_reverse_o2o_{{ related_field_name.id }} : {{ model_klass }}?
 
                     def {{ related_field_name.id }}
-                      @_reverse_relation_{{ related_field_name.id }} ||= {{ model_klass }}.get({{ field_id }}: pk)
+                      @_reverse_o2o_{{ related_field_name.id }} ||= {{ model_klass }}.get({{ field_id }}: pk)
                     end
 
                     def {{ related_field_name.id }}!
-                      {{ related_field_name.id }}.not_nil!
+                      @_reverse_o2o_{{ related_field_name.id }} ||= {{ model_klass }}.get!({{ field_id }}: pk)
                     end
                   end
                 end

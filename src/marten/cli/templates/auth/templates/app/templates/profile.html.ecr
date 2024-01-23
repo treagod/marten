@@ -1,0 +1,10 @@
+{% extend "base.html" %}
+
+{% block content %}
+<h1>Profile</h1>
+<p>
+    <strong>Email:</strong> {{ request.user.email }}
+    &bull;&nbsp;<a href="{% url '<%= context.label %>:password_update' %}">Update password</a>
+    &bull;&nbsp;<a href="{% url '<%= context.label %>:sign_out' %}">Sign out</a>
+</p>
+{% endblock content %}

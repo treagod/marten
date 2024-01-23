@@ -27,11 +27,13 @@ module Marten
       register "capitalize", Capitalize
       register "default", Default
       register "downcase", DownCase
+      register "escape", Escape
       register "join", Join
       register "linebreaks", LineBreaks
       register "safe", Safe
       register "size", Size
       register "split", Split
+      register "time", Time
       register "upcase", UpCase
     end
   end

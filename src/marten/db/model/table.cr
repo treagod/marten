@@ -8,7 +8,7 @@ module Marten
         annotation FieldInstanceVariable; end
 
         # :nodoc:
-        annotation ReverseRelationInstanceVariable; end
+        annotation RelationInstanceVariable; end
 
         macro included
           LOOKUP_SEP = {{ Marten::DB::Constants::LOOKUP_SEP }}
@@ -369,6 +369,11 @@ module Marten
           {% end %}
         end
 
+        # Returns true if a primary key value is set on the record.
+        def pk? : Bool
+          self.class.pk_field.getter_value?(pk)
+        end
+
         # Returns the primary key value or raise `NilAssertionError`.
         def pk!
           pk.not_nil!
@@ -480,6 +485,29 @@ module Marten
           {% end %}
         end
 
+        protected def assign_reverse_related_object(related_object, relation_field_id)
+          {% begin %}
+          case relation_field_id
+          {% for relation_var in @type.instance_vars
+                                   .select { |ivar| ivar.annotation(Marten::DB::Model::Table::RelationInstanceVariable) } %} # ameba:disable Layout/LineLength
+          {% ann = relation_var.annotation(Marten::DB::Model::Table::RelationInstanceVariable) %}
+          {% if ann && ann[:relation_name] %}
+          when {{ ann[:relation_name].stringify }}
+            if !related_object.nil? && !related_object.is_a?({{ ann[:related_model] }})
+              raise Errors::UnexpectedFieldValue.new(
+                "Value for relation {{ ann[:relation_name] }} should be of type {{ ann[:related_model] }}, " \
+                "not #{typeof(related_object)}"
+              )
+            end
+            @{{ relation_var.name }} = related_object.as({{ ann[:related_model] }}?)
+          {% end %}
+          {% end %}
+
+          else
+          end
+          {% end %}
+        end
+
         protected def field_values
           values = {} of String => Field::Any
           {% for field_var in @type.instance_vars
@@ -499,14 +527,22 @@ module Marten
             assign_parent_model_field_from_db_result_set(parent_model, result_set, column_name)
           end
 
-          row_iterator.each_joined_relation do |relation_row_iterator, relation_field|
-            if get_field_value(relation_field.id).nil?
-              # In that case the local relation field (relation ID, likely) is nil, which means that we need to
-              # "advance" the row cursor so that the next relation can be correctly picked up afterwards.
-              relation_row_iterator.advance
+          row_iterator.each_joined_relation do |relation_row_iterator, relation_field, reverse_relation|
+            if reverse_relation.nil?
+              if get_field_value(relation_field.id).nil?
+                # In that case the local relation field (relation ID, likely) is nil, which means that we need to
+                # "advance" the row cursor so that the next relation can be correctly picked up afterwards.
+                relation_row_iterator.advance
+              else
+                related_object = relation_field.related_model.from_db_row_iterator(relation_row_iterator)
+                assign_related_object(related_object, relation_field.id)
+              end
             else
-              related_object = relation_field.related_model.from_db_row_iterator(relation_row_iterator)
-              assign_related_object(related_object, relation_field.id)
+              related_object = reverse_relation.model.from_db_row_iterator(relation_row_iterator)
+
+              # Only assign the retrieved object if it is persisted (ie. if it has a primary key value). If that's not
+              # then case, then this means that current record does not have a reverse related object.
+              assign_reverse_related_object(related_object, reverse_relation.id) if related_object.pk?
             end
           end
         end
@@ -600,8 +636,8 @@ module Marten
           {% end %}
         end
 
-        private def reset_reverse_relations : Nil
-          {% for field_var in @type.instance_vars.select { |ivar| ivar.annotation(Marten::DB::Model::Table::ReverseRelationInstanceVariable) } %} # ameba:disable Layout/LineLength
+        private def reset_relation_instance_variables : Nil
+          {% for field_var in @type.instance_vars.select { |ivar| ivar.annotation(Marten::DB::Model::Table::RelationInstanceVariable) } %} # ameba:disable Layout/LineLength
             @{{ field_var.id }} = nil
           {% end %}
         end

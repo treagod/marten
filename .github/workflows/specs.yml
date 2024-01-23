@@ -2,14 +2,18 @@ name: Specs
 
 on:
   push:
-    branches: "*"
+    branches:
+      - "*"
+      - "*/*"
   pull_request:
-    branches: "*"
+    branches:
+      - "*"
+      - "*/*"
   schedule:
     - cron: '0 0 * * *'
 
 jobs:
-  mysql:
+  mysql57:
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -25,9 +29,51 @@ jobs:
       fail-fast: false
       matrix:
         crystal: [
-          '1.7.3',
-          '1.8.2',
           '1.9.2',
+          '1.10.0',
+          '1.11.1',
+          'nightly',
+        ]
+    container:
+      image: crystallang/crystal:${{ matrix.crystal }}
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install packages required for MySQL
+      run: |
+        apt-get update
+        apt-get -yqq install mysql-client libmysqlclient-dev
+    - name: Create additional DB for MySQL
+      run: |
+        mysql -u root -h mysql --password=mysql -e 'create database marten_other_test;'
+      env:
+        PGPASSWORD: mysql
+    - name: Install shards
+      run: shards install --ignore-crystal-version --skip-postinstall --skip-executables
+    - name: Setup env JSON file
+      run: cp .spec.env.json.ci .spec.env.json
+    - name: Run tests
+      run: scripts/run_batched_specs
+      env:
+        MARTEN_SPEC_DB_CONNECTION: mysql
+  mysql8:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: "mysql"
+          MYSQL_DATABASE: marten_test
+        ports:
+          - 3307:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5 -e MYSQL_ROOT_PASSWORD=mysql -e MYSQL_USER=marten_test -e MYSQL_PASSWORD=marten_test -e MYSQL_DATABASE=marten_test --entrypoint sh mysql:8 -c "exec docker-entrypoint.sh mysqld --default-authentication-plugin=mysql_native_password"
+    continue-on-error: ${{ matrix.crystal == 'nightly' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        crystal: [
+          '1.9.2',
+          '1.10.0',
+          '1.11.1',
           'nightly',
         ]
     container:
@@ -67,11 +113,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        db_version: ['12', '13', '14', '15', 'latest']
+        db_version: ['14', '15', '16']
         crystal: [
-          '1.7.3',
-          '1.8.2',
           '1.9.2',
+          '1.10.0',
+          '1.11.1',
           'nightly',
         ]
     container:
@@ -102,9 +148,9 @@ jobs:
       fail-fast: false
       matrix:
         crystal: [
-          '1.7.3',
-          '1.8.2',
           '1.9.2',
+          '1.10.0',
+          '1.11.1',
           'nightly',
         ]
     container:
@@ -121,18 +167,12 @@ jobs:
       run: cp .spec.env.json.ci .spec.env.json
     - name: Run tests
       run: scripts/run_batched_specs
-  generated-auth:
+  generated-auth-project:
     runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.crystal == 'nightly' }}
     strategy:
       fail-fast: false
-      matrix:
-        crystal: [
-          '1.9.2',
-          'nightly',
-        ]
     container:
-      image: crystallang/crystal:${{ matrix.crystal }}
+      image: crystallang/crystal:1.11.1
     steps:
     - uses: actions/checkout@v2
     - name: Install packages required for SQLite
@@ -154,5 +194,36 @@ jobs:
         cd tmp/test-auth
         shards install --ignore-crystal-version --skip-postinstall --skip-executables
         cd lib && rm -rf marten && ln -s ../../.. marten
+    - name: Run generated project tests
+      run: cd tmp/test-auth && crystal spec
+  generated-auth-app:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    container:
+      image: crystallang/crystal:1.11.1
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install packages required for SQLite
+      run: |
+        apt-get update
+        apt-get -yqq install libsqlite3-dev
+    - name: Install shards
+      run: shards install --ignore-crystal-version --skip-postinstall --skip-executables
+    - name: Build the Marten CLI
+      run: |
+        mkdir bin
+        crystal build src/marten_cli.cr -o bin/marten
+    - name: Generate a project with authentication
+      run: |
+        mkdir tmp
+        bin/marten new project test-auth --dir=./tmp/test-auth
+    - name: Install generated project dependencies
+      run: |
+        cd tmp/test-auth
+        shards install --ignore-crystal-version --skip-postinstall --skip-executables
+        cd lib && rm -rf marten && ln -s ../../.. marten
+        cd .. && crystal run manage.cr -- g auth my_auth
+        shards install --ignore-crystal-version --skip-postinstall --skip-executables
     - name: Run generated project tests
       run: cd tmp/test-auth && crystal spec

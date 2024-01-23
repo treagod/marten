@@ -4,7 +4,7 @@ description: Learn how to define handler callbacks.
 sidebar_label: Callbacks
 ---
 
-Callbacks enable you to define logic that is triggered at different stages of a handler's lifecycle. This feature allows you to intercept incoming requests and potentially bypass the standard `#dispatch` method. This documents covers the available callbacks and introduces you to the associated API, which you can use to define hooks in your handlers.
+Callbacks enable you to define logic that is triggered at different stages of a handler's lifecycle. This feature allows you to intercept incoming requests and potentially bypass the standard `#dispatch` method. This document covers the available callbacks and introduces you to the associated API, which you can use to define hooks in your handlers.
 
 ## Overview
 
@@ -72,9 +72,28 @@ end
 
 Similarly to `#before_dispatch` callbacks, `#after_dispatch` callbacks can return a brand new [`Marten::HTTP::Response`](pathname:///api/dev/Marten/HTTP/Response.html) object. When this is the case, this response is always used instead of the one that was returned by the handler's `#dispatch` method.
 
+### `before_render`
+
+`before_render` callbacks are invoked prior to rendering a template when generating a response that incorporates its content. This means that these callbacks are executed as part of the [`#render`](./introduction.md#render) helper method and when rendering templates as part of subclasses of the [`Marten::Handlers::Template`](./generic-handlers.md#rendering-a-template) generic handler.
+
+Typically, these callbacks are used to add new variables to the [global template context](./introduction.md#global-template-context), in order to make them accessible to the template runtime. For example:
+
+```crystal
+class MyHandler < Marten::Handlers::Template
+  template_name "app/my_template.html"
+  before_render :add_variable_to_context
+
+  private def add_variable_to_context : Nil
+    context["foo"] = "bar"
+  end
+end
+```
+
+Note that `before_render` callbacks can technically be used to return a [`Marten::HTTP::Response`](pathname:///api/dev/Marten/HTTP/Response.html) object. When this situation arises, this response always takes precedence over the one that would've been returned following the rendering of the template.
+
 ## Schema handler callbacks
 
-The following callbacks are only available for handlers that inherit from the [schema handler](./reference/generic-handlers#processing-a-schema). That is, handlers that inherit from [`Marten::Handlers::Schema`](pathname:///api/dev/Marten/Handlers/Schema.html), but also handlers that inherit from [`Marten::Handlers::RecordCreate`](pathname:///api/dev/Marten/Handlers/RecordCreate.html) and [`Marten::Handlers::RecordUpdate`](pathname:///api/dev/Marten/Handlers/RecordUpdate.html).
+The following callbacks are only available for handlers that inherit from the [schema handler](./reference/generic-handlers.md#processing-a-schema). That is, handlers that inherit from [`Marten::Handlers::Schema`](pathname:///api/dev/Marten/Handlers/Schema.html), but also handlers that inherit from [`Marten::Handlers::RecordCreate`](pathname:///api/dev/Marten/Handlers/RecordCreate.html) and [`Marten::Handlers::RecordUpdate`](pathname:///api/dev/Marten/Handlers/RecordUpdate.html).
 
 These callbacks let you define logics that are triggered before or after the validation of the schema. This allows you to easily intercept validation and handle the response independently of the schema validity. All these callbacks can optionally return a [`Marten::HTTP::Response`](pathname:///api/dev/Marten/HTTP/Response.html) object. When an HTTP response is returned,
 all following callbacks are skipped and the obtained response is returned directly, thus bypassing responses that might have been returned after by the handler.

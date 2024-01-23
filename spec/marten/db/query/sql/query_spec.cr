@@ -132,6 +132,90 @@ describe Marten::DB::Query::SQL::Query do
       query.execute.should eq [user_2]
     end
 
+    it "is able to process query nodes with filters on many-to-many relations" do
+      tag_1 = Tag.create!(name: "ruby", is_active: true)
+      tag_2 = Tag.create!(name: "crystal", is_active: true)
+      tag_3 = Tag.create!(name: "coding", is_active: true)
+
+      user_1 = TestUser.create!(username: "foo", email: "foo@example.com", first_name: "John", last_name: "Doe")
+      user_1.tags.add(tag_1, tag_2)
+      user_2 = TestUser.create!(username: "bar", email: "bar@example.com", first_name: "John", last_name: "Doe")
+      user_2.tags.add(tag_2, tag_3)
+
+      query = Marten::DB::Query::SQL::Query(TestUser).new
+      query.add_query_node(Marten::DB::Query::Node.new(tags__name__startswith: "r"))
+      query.count.should eq 1
+      query.execute.to_a.should eq [user_1]
+    end
+
+    it "is able to process query nodes with filters on many-to-many relations plus additional relations" do
+      address_1 = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 1")
+      address_2 = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Main Street")
+      address_3 = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Other Street")
+
+      person_1 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Person 1",
+        email: "person-1@example.com",
+        address: address_1,
+      )
+      person_2 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Person 2",
+        email: "person-2@example.com",
+        address: address_2,
+      )
+      person_3 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Person 3",
+        email: "person-3@example.com",
+        address: address_3,
+      )
+
+      book_1 = Marten::DB::Query::SQL::QuerySpec::Book.create!(title: "Book 1")
+      book_1.authors.add(person_1, person_2)
+      book_2 = Marten::DB::Query::SQL::QuerySpec::Book.create!(title: "Book 2")
+      book_2.authors.add(person_2)
+      book_3 = Marten::DB::Query::SQL::QuerySpec::Book.create!(title: "Book 3")
+      book_3.authors.add(person_3)
+
+      query = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Book).new
+      query.add_query_node(Marten::DB::Query::Node.new(authors__address__street__istartswith: "main"))
+      query.count.should eq 2
+      query.execute.to_set.should eq [book_1, book_2].to_set
+    end
+
+    it "is able to process query nodes with filters on reverse many-to-many relations" do
+      address_1 = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 1")
+      address_2 = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Main Street")
+      address_3 = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Other Street")
+
+      person_1 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Person 1",
+        email: "person-1@example.com",
+        address: address_1,
+      )
+      person_2 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Person 2",
+        email: "person-2@example.com",
+        address: address_2,
+      )
+      person_3 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Person 3",
+        email: "person-3@example.com",
+        address: address_3,
+      )
+
+      book_1 = Marten::DB::Query::SQL::QuerySpec::Book.create!(title: "Book 1")
+      book_1.authors.add(person_1)
+      book_2 = Marten::DB::Query::SQL::QuerySpec::Book.create!(title: "Book 2")
+      book_2.authors.add(person_2)
+      book_3 = Marten::DB::Query::SQL::QuerySpec::Book.create!(title: "Book 3-1")
+      book_3.authors.add(person_3)
+
+      query = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Person).new
+      query.add_query_node(Marten::DB::Query::Node.new(books__title__endswith: "1"))
+      query.count.should eq 2
+      query.execute.to_set.should eq [person_1, person_3].to_set
+    end
+
     it "adds a root predicate to prevent inconsistencies based on the order of negated and non-negated predicates" do
       Tag.create!(name: "ruby", is_active: true)
       tag_2 = Tag.create!(name: "crystal", is_active: true)
@@ -605,6 +689,23 @@ describe Marten::DB::Query::SQL::Query do
       results[1].__query_spec_author.should eq user_2
     end
 
+    it "allows to specify a one-to-one reverse relation to join" do
+      user_1 = TestUser.create!(username: "jd1", email: "jd1@example.com", first_name: "John", last_name: "Doe")
+      user_profile_1 = TestUserProfile.create!(user: user_1)
+      user_2 = TestUser.create!(username: "jd2", email: "jd2@example.com", first_name: "John", last_name: "Doe")
+
+      query = Marten::DB::Query::SQL::Query(TestUser).new
+      query.add_selected_join("profile")
+
+      results = query.execute
+
+      results[0].should eq user_1
+      results[0].__query_spec_profile.should eq user_profile_1
+
+      results[1].should eq user_2
+      results[1].__query_spec_profile.should be_nil
+    end
+
     it "raises if the passed field is not a relation" do
       query = Marten::DB::Query::SQL::Query(Post).new
       expect_raises(
@@ -615,7 +716,7 @@ describe Marten::DB::Query::SQL::Query do
       end
     end
 
-    it "raises if the passed field is a reverse relation" do
+    it "raises if the passed field is not a single record reverse relation" do
       query = Marten::DB::Query::SQL::Query(TestUser).new
       expect_raises(
         Marten::DB::Errors::InvalidField,
@@ -681,6 +782,99 @@ describe Marten::DB::Query::SQL::Query do
 
         results[0].__query_spec_author.should eq student
         results[0].__query_spec_author.not_nil!.__query_spec_address.should eq address
+      end
+
+      it "allows to specify direct one-to-one reverse relations" do
+        address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 2")
+        student = Marten::DB::Query::SQL::QuerySpec::Student.create!(
+          name: "Student 1",
+          email: "student-1@example.com",
+          address: address,
+          grade: "10"
+        )
+
+        Marten::DB::Query::SQL::QuerySpec::PersonProfile.create!(person: student)
+        student_profile = Marten::DB::Query::SQL::QuerySpec::StudentProfile.create!(student: student)
+
+        query = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Student).new
+        query.add_selected_join("student_profile")
+
+        results = query.execute
+
+        results[0].should eq student
+        results[0].__query_spec_student_profile.should eq student_profile
+      end
+
+      it "allows to specify inherited one-to-one reverse relations" do
+        address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 2")
+        student = Marten::DB::Query::SQL::QuerySpec::Student.create!(
+          name: "Student 1",
+          email: "student-1@example.com",
+          address: address,
+          grade: "10"
+        )
+
+        person_profile = Marten::DB::Query::SQL::QuerySpec::PersonProfile.create!(person: student)
+        Marten::DB::Query::SQL::QuerySpec::StudentProfile.create!(student: student)
+
+        query = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Student).new
+        query.add_selected_join("person_profile")
+
+        results = query.execute
+
+        results[0].should eq student
+        results[0].__query_spec_person_profile.should eq person_profile
+      end
+
+      it "allows to specify both direct and inherited one-to-one reverse relations at the same time" do
+        address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 2")
+        student = Marten::DB::Query::SQL::QuerySpec::Student.create!(
+          name: "Student 1",
+          email: "student-1@example.com",
+          address: address,
+          grade: "10"
+        )
+
+        person_profile = Marten::DB::Query::SQL::QuerySpec::PersonProfile.create!(person: student)
+        student_profile = Marten::DB::Query::SQL::QuerySpec::StudentProfile.create!(student: student)
+
+        query_1 = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Student).new
+        query_1.add_selected_join("person_profile")
+        query_1.add_selected_join("student_profile")
+        results_1 = query_1.execute
+
+        results_1[0].should eq student
+        results_1[0].__query_spec_person_profile.should eq person_profile
+        results_1[0].__query_spec_student_profile.should eq student_profile
+
+        query_2 = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Student).new
+        query_2.add_selected_join("student_profile")
+        query_2.add_selected_join("person_profile")
+        results_2 = query_2.execute
+
+        results_2[0].should eq student
+        results_2[0].__query_spec_person_profile.should eq person_profile
+        results_2[0].__query_spec_student_profile.should eq student_profile
+      end
+
+      it "allows to specify a related record that inherits from other records" do
+        address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 2")
+        student = Marten::DB::Query::SQL::QuerySpec::Student.create!(
+          name: "Student 1",
+          email: "student-1@example.com",
+          address: address,
+          grade: "10"
+        )
+
+        student_profile = Marten::DB::Query::SQL::QuerySpec::StudentProfile.create!(student: student)
+
+        query = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::StudentProfile).new
+        query.add_selected_join("student")
+
+        results = query.execute
+
+        results[0].should eq student_profile
+        results[0].__query_spec_student.should eq student
       end
     end
   end
@@ -778,6 +972,119 @@ describe Marten::DB::Query::SQL::Query do
       Tag.create!(name: "coding", is_active: true)
 
       Marten::DB::Query::SQL::Query(Tag).new.count.should eq 3
+    end
+
+    it "returns the expected number of results for an unfiltered query with specific column defined" do
+      address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 1")
+
+      student = Marten::DB::Query::SQL::QuerySpec::Student.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+        grade: "10"
+      )
+
+      Marten::DB::Query::SQL::QuerySpec::Article.create!(title: "Top things", author: student)
+      Marten::DB::Query::SQL::QuerySpec::Article.create!(
+        title: "Top things 2",
+        subtitle: "Rise of the top things",
+        author: student
+      )
+      Marten::DB::Query::SQL::QuerySpec::Article.create!(
+        title: "Top things 3",
+        subtitle: "Top things awakening",
+        author: student
+      )
+
+      Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Article).new.count("subtitle").should eq 2
+    end
+
+    it "returns the expected number of results when counting on a specific column located on a direct relationship" do
+      address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 1")
+
+      student_1 = Marten::DB::Query::SQL::QuerySpec::Student.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+        grade: "10"
+      )
+      student_2 = Marten::DB::Query::SQL::QuerySpec::Student.create!(
+        name: "Student 1",
+        surname: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+        grade: "10",
+      )
+
+      Marten::DB::Query::SQL::QuerySpec::Article.create!(title: "Top things", author: student_1)
+      Marten::DB::Query::SQL::QuerySpec::Article.create!(title: "Top things", author: student_2)
+      Marten::DB::Query::SQL::QuerySpec::Article.create!(title: "Top things", author: student_2)
+
+      Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Article).new.count("author__surname").should eq 2
+    end
+
+    it "returns the expected number of results when counting on a specific relationship column" do
+      user_1 = TestUser.create!(username: "foo", email: "foo@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "bar", email: "bar@example.com", first_name: "John", last_name: "Doe")
+
+      Post.create!(author: user_1, title: "Post 1")
+      Post.create!(author: user_2, title: "Post 2")
+      Post.create!(author: user_1, updated_by: user_2, title: "Post 3")
+
+      Marten::DB::Query::SQL::Query(Post).new.count("updated_by").should eq 1
+      Marten::DB::Query::SQL::Query(Post).new.count("updated_by_id").should eq 1
+    end
+
+    it "returns the expected number of results when counting on a field going through a reverse relation" do
+      address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 1")
+
+      person_1 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+      )
+      Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+      )
+      Marten::DB::Query::SQL::QuerySpec::PersonProfile.create!(person: person_1, bio: "Bio 1")
+
+      query = Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Person).new
+      query.count("person_profile__bio").should eq 1
+    end
+
+    it "returns the expected number of results when counting on a specific reverse relation" do
+      address = Marten::DB::Query::SQL::QuerySpec::Address.create!(street: "Street 1")
+
+      person_1 = Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+      )
+      Marten::DB::Query::SQL::QuerySpec::Person.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+      )
+      Marten::DB::Query::SQL::QuerySpec::PersonProfile.create!(person: person_1)
+
+      Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Person).new.count("person_profile").should eq 1
+    end
+
+    it "raises if non existing field is counted" do
+      expect_raises(
+        Marten::DB::Errors::InvalidField,
+        "Unable to resolve 'not_existing' as a field. Valid choices are: author_id, id, title, subtitle."
+      ) do
+        Marten::DB::Query::SQL::Query(Marten::DB::Query::SQL::QuerySpec::Article).new.count("not_existing")
+      end
+    end
+
+    it "raises if the specified field is a many-to-many field" do
+      expect_raises(Marten::DB::Errors::InvalidField, "Unable to resolve 'tags' as a field.") do
+        Marten::DB::Query::SQL::Query(TestUser).new.count("tags")
+      end
     end
 
     it "returns the expected number of results for a filtered query" do
@@ -1119,6 +1426,68 @@ describe Marten::DB::Query::SQL::Query do
       query.order([:first_name, :last_name])
       query.execute.should eq [user_3, user_2, user_4, user_1]
     end
+
+    it "can configure a query to be ordered by a field going through a direct relationship field" do
+      user_1 = TestUser.create!(username: "u1", email: "u1@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "u2", email: "u2@example.com", first_name: "Bob", last_name: "Ka")
+      user_3 = TestUser.create!(username: "u3", email: "u3@example.com", first_name: "Foo", last_name: "Bar")
+
+      post_1 = Post.create!(author: user_2, title: "Post 1")
+      post_2 = Post.create!(author: user_1, title: "Post 2")
+      post_3 = Post.create!(author: user_3, title: "Post 3")
+
+      query = Marten::DB::Query::SQL::Query(Post).new
+      query.order("author__username")
+      query.execute.should eq [post_2, post_1, post_3]
+    end
+
+    it "can configure a query to be ordered by a direct relationship field" do
+      user_1 = TestUser.create!(username: "u1", email: "u1@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "u2", email: "u2@example.com", first_name: "Bob", last_name: "Ka")
+      user_3 = TestUser.create!(username: "u3", email: "u3@example.com", first_name: "Foo", last_name: "Bar")
+
+      post_1 = Post.create!(author: user_2, title: "Post 1")
+      post_2 = Post.create!(author: user_1, title: "Post 2")
+      post_3 = Post.create!(author: user_3, title: "Post 3")
+
+      query = Marten::DB::Query::SQL::Query(Post).new
+      query.order("author")
+      query.execute.should eq [post_2, post_1, post_3]
+    end
+
+    it "can configure a query to be ordered by a field going through a reverse relation" do
+      user_1 = TestUser.create!(username: "u1", email: "u1@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "u2", email: "u2@example.com", first_name: "Bob", last_name: "Ka")
+      user_3 = TestUser.create!(username: "u3", email: "u3@example.com", first_name: "Foo", last_name: "Bar")
+
+      TestUserProfile.create!(user: user_1, bio: "Bio B")
+      TestUserProfile.create!(user: user_2, bio: "Bio A")
+      TestUserProfile.create!(user: user_3, bio: "Bio C")
+
+      query = Marten::DB::Query::SQL::Query(TestUser).new
+      query.order("profile__bio")
+      query.execute.should eq [user_2, user_1, user_3]
+    end
+
+    it "can configure a query to be ordered by a reverse relation" do
+      user_1 = TestUser.create!(username: "u1", email: "u1@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "u2", email: "u2@example.com", first_name: "Bob", last_name: "Ka")
+      user_3 = TestUser.create!(username: "u3", email: "u3@example.com", first_name: "Foo", last_name: "Bar")
+
+      TestUserProfile.create!(user: user_1, bio: "Bio B")
+      TestUserProfile.create!(user: user_2, bio: "Bio A")
+      TestUserProfile.create!(user: user_3, bio: "Bio C")
+
+      query = Marten::DB::Query::SQL::Query(TestUser).new
+      query.order("profile")
+      query.execute.should eq [user_1, user_2, user_3]
+    end
+
+    it "raises if the specified field is a many-to-many field" do
+      expect_raises(Marten::DB::Errors::InvalidField, "Unable to resolve 'tags' as a field.") do
+        Marten::DB::Query::SQL::Query(TestUser).new.order(["tags"])
+      end
+    end
   end
 
   describe "#ordered?" do
@@ -1234,6 +1603,36 @@ describe Marten::DB::Query::SQL::Query do
         [["Post 1", "John"], ["Post 2", "John"], ["Post 3", "John"], ["Post 4", "John"], ["Post 5", "Bob"]].to_set
       )
     end
+
+    it "allows extracting field values by following reverse relations" do
+      user_1 = TestUser.create!(username: "jd1", email: "jd1@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "jd2", email: "jd2@example.com", first_name: "John", last_name: "Doe")
+      user_3 = TestUser.create!(username: "jd3", email: "jd3@example.com", first_name: "Bob", last_name: "Doe")
+
+      TestUserProfile.create!(user: user_1, bio: "Bio 1")
+      TestUserProfile.create!(user: user_2, bio: "Bio 2")
+      TestUserProfile.create!(user: user_3, bio: "Bio 3")
+
+      query = Marten::DB::Query::SQL::Query(TestUser).new
+      query.pluck(["username", "profile__bio"]).to_set.should eq(
+        [["jd1", "Bio 1"], ["jd2", "Bio 2"], ["jd3", "Bio 3"]].to_set
+      )
+    end
+
+    it "allows extracting reverse relations directly" do
+      user_1 = TestUser.create!(username: "jd1", email: "jd1@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "jd2", email: "jd2@example.com", first_name: "John", last_name: "Doe")
+      user_3 = TestUser.create!(username: "jd3", email: "jd3@example.com", first_name: "Bob", last_name: "Doe")
+
+      profile_1 = TestUserProfile.create!(user: user_1, bio: "Bio 1")
+      profile_2 = TestUserProfile.create!(user: user_2, bio: "Bio 2")
+      profile_3 = TestUserProfile.create!(user: user_3, bio: "Bio 3")
+
+      query = Marten::DB::Query::SQL::Query(TestUser).new
+      query.pluck(["username", "profile"]).to_set.should eq(
+        [["jd1", profile_1.id], ["jd2", profile_2.id], ["jd3", profile_3.id]].to_set
+      )
+    end
   end
 
   describe "#setup_distinct_clause" do
@@ -1294,6 +1693,43 @@ describe Marten::DB::Query::SQL::Query do
 
         query.count.should eq 2
         query.execute.to_set.should eq [post_1, post_5].to_set
+      end
+
+      it "allows to configure a distinct clause based on a specific field by following reverse relations" do
+        user_1 = TestUser.create!(username: "jd1", email: "jd1@example.com", first_name: "John", last_name: "Doe")
+        user_2 = TestUser.create!(username: "jd2", email: "jd2@example.com", first_name: "John", last_name: "Doe")
+        user_3 = TestUser.create!(username: "jd3", email: "jd3@example.com", first_name: "Bob", last_name: "Doe")
+
+        TestUserProfile.create!(user: user_1, bio: "Bio 1")
+        TestUserProfile.create!(user: user_2, bio: "Bio 2")
+        TestUserProfile.create!(user: user_3, bio: "Bio 1")
+
+        query = Marten::DB::Query::SQL::Query(TestUser).new
+        query.setup_distinct_clause(["profile__bio"])
+
+        query.count.should eq 2
+        query.execute.to_set.should eq [user_1, user_2].to_set
+      end
+
+      it "allows to configure a distinct clause based on a specific reverse relation" do
+        user_1 = TestUser.create!(username: "jd1", email: "jd1@example.com", first_name: "John", last_name: "Doe")
+        user_2 = TestUser.create!(username: "jd2", email: "jd2@example.com", first_name: "John", last_name: "Doe")
+        user_3 = TestUser.create!(username: "jd3", email: "jd3@example.com", first_name: "Bob", last_name: "Doe")
+
+        TestUserProfile.create!(user: user_1, bio: "Bio 1")
+        TestUserProfile.create!(user: user_2, bio: "Bio 2")
+        TestUserProfile.create!(user: user_3, bio: "Bio 1")
+
+        query = Marten::DB::Query::SQL::Query(TestUser).new
+        query.setup_distinct_clause(["profile"])
+
+        query.count.should eq 3
+      end
+
+      it "raises if the specified field is a many-to-many field" do
+        expect_raises(Marten::DB::Errors::InvalidField, "Unable to resolve 'tags' as a field.") do
+          Marten::DB::Query::SQL::Query(TestUser).new.setup_distinct_clause(["tags"])
+        end
       end
     end
   end
@@ -1775,5 +2211,11 @@ class Post
 
   def __query_spec_updated_by
     @updated_by
+  end
+end
+
+class TestUser
+  def __query_spec_profile
+    @_reverse_o2o_profile
   end
 end

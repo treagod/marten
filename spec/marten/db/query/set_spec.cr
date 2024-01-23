@@ -415,6 +415,30 @@ describe Marten::DB::Query::Set do
       Marten::DB::Query::Set(Tag).new.count.should eq 3
     end
 
+    it "returns the expected number of results for an unfiltered query with specific column defined" do
+      address = Marten::DB::Query::SetSpec::Address.create!(street: "Street 1")
+      student = Marten::DB::Query::SetSpec::Student.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+        grade: "10"
+      )
+
+      Marten::DB::Query::SetSpec::Article.create!(title: "Top things", author: student)
+      Marten::DB::Query::SetSpec::Article.create!(
+        title: "Top things 2",
+        subtitle: "Rise of the top things",
+        author: student
+      )
+      Marten::DB::Query::SetSpec::Article.create!(
+        title: "Top things 3",
+        subtitle: "Top things awakening",
+        author: student
+      )
+
+      Marten::DB::Query::Set(Marten::DB::Query::SetSpec::Article).new.count(:subtitle).should eq 2
+    end
+
     it "returns the expected number of record for an unfiltered query set that was already fetched" do
       Tag.create!(name: "ruby", is_active: true)
       Tag.create!(name: "crystal", is_active: true)
@@ -452,6 +476,33 @@ describe Marten::DB::Query::Set do
       qset_3 = Marten::DB::Query::Set(Tag).new.filter(name__startswith: "x").all
       qset_3.each { }
       qset_3.count.should eq 0
+    end
+
+    it "does not use cached records to do the count if a field is specified" do
+      address = Marten::DB::Query::SetSpec::Address.create!(street: "Street 1")
+      student = Marten::DB::Query::SetSpec::Student.create!(
+        name: "Student 1",
+        email: "student-1@example.com",
+        address: address,
+        grade: "10"
+      )
+
+      Marten::DB::Query::SetSpec::Article.create!(title: "Top things", author: student)
+      Marten::DB::Query::SetSpec::Article.create!(
+        title: "Top things 2",
+        subtitle: "Rise of the top things",
+        author: student
+      )
+      Marten::DB::Query::SetSpec::Article.create!(
+        title: "Top things 3",
+        subtitle: "Top things awakening",
+        author: student
+      )
+
+      qset = Marten::DB::Query::Set(Marten::DB::Query::SetSpec::Article).new
+      qset.each { }
+      qset.count.should eq 3
+      qset.count(:subtitle).should eq 2
     end
   end
 
@@ -619,6 +670,22 @@ describe Marten::DB::Query::Set do
       expect_raises(Marten::DB::Errors::UnmetQuerySetCondition, "Delete with joins is not supported") do
         Marten::DB::Query::Set(Post).new.join(:author).delete
       end
+    end
+
+    it "resets cached records" do
+      tag_1 = Tag.create!(name: "ruby", is_active: true)
+      tag_2 = Tag.create!(name: "crystal", is_active: true)
+      tag_3 = Tag.create!(name: "coding", is_active: true)
+
+      qset = Marten::DB::Query::Set(Tag).new.filter(name__startswith: :c)
+
+      qset.to_set.should eq(Set{tag_2, tag_3})
+
+      qset.delete.should eq 2
+
+      qset.to_a.should be_empty
+
+      Marten::DB::Query::Set(Tag).new.to_a.should eq [tag_1]
     end
 
     context "with multi table inheritance" do
@@ -826,7 +893,7 @@ describe Marten::DB::Query::Set do
       tag_3 = Tag.create!(name: "coding", is_active: true)
       Tag.create!(name: "programming", is_active: true)
 
-      qset = Marten::DB::Query::Set(Tag).new.exclude { q(name__startswith: :r) | q(name: "programming") }
+      qset = Marten::DB::Query::Set(Tag).new.exclude { q(name__startswith: :r) | q(name: "programming") }.order(:id)
 
       qset.to_a.should eq [tag_2, tag_3]
     end
@@ -1581,8 +1648,7 @@ describe Marten::DB::Query::Set do
       Post.create!(author: user_2, title: "Post 2")
 
       qset = Marten::DB::Query::Set(Post).new.order(:id)
-
-      qset.join("author")
+      qset = qset.join("author")
 
       qset[0].__set_spec_author.should eq user_1
       qset[1].__set_spec_author.should eq user_2
@@ -1596,8 +1662,7 @@ describe Marten::DB::Query::Set do
       Post.create!(author: user_2, title: "Post 2")
 
       qset = Marten::DB::Query::Set(Post).new.order(:id)
-
-      qset.join(:author)
+      qset = qset.join(:author)
 
       qset[0].__set_spec_author.should eq user_1
       qset[1].__set_spec_author.should eq user_2
@@ -1611,8 +1676,7 @@ describe Marten::DB::Query::Set do
       Post.create!(author: user_2, title: "Post 2", updated_by: user_1)
 
       qset = Marten::DB::Query::Set(Post).new.order(:id)
-
-      qset.join(:author, :updated_by)
+      qset = qset.join(:author, :updated_by)
 
       qset[0].__set_spec_author.should eq user_1
       qset[0].__set_spec_updated_by.should be_nil
@@ -1621,11 +1685,105 @@ describe Marten::DB::Query::Set do
       qset[1].__set_spec_updated_by.should eq user_1
     end
 
+    it "allows to specify one-to-one reverse relations" do
+      user_1 = TestUser.create!(username: "jd1", email: "jd1@example.com", first_name: "John", last_name: "Doe")
+      user_profile_1 = TestUserProfile.create!(user: user_1)
+      user_2 = TestUser.create!(username: "jd2", email: "jd2@example.com", first_name: "John", last_name: "Doe")
+
+      qset = Marten::DB::Query::Set(TestUser).new.order(:id)
+      qset = qset.join(:profile)
+
+      qset[0].should eq user_1
+      qset[0].__set_spec_profile.should eq user_profile_1
+
+      qset[1].should eq user_2
+      qset[1].__set_spec_profile.should be_nil
+    end
+
+    it "raises if the specified relation is not a single record relation" do
+      expect_raises(Marten::DB::Errors::InvalidField, /Unable to resolve 'tags' as a relation field/) do
+        Marten::DB::Query::Set(Post).new.join(:tags)
+      end
+    end
+
+    it "raises if the specified reverse relation is not a single record relation" do
+      expect_raises(Marten::DB::Errors::InvalidField, /Unable to resolve 'posts' as a relation field/) do
+        Marten::DB::Query::Set(TestUser).new.join(:posts)
+      end
+    end
+
     it "raises as expected when called without arguments" do
       qset = Marten::DB::Query::Set(Post).new
 
       expect_raises(Marten::DB::Errors::UnmetQuerySetCondition, "Relations must be specified when joining") do
         qset.join
+      end
+    end
+
+    context "with multi table inheritance" do
+      it "allows to specify direct one-to-one reverse relations" do
+        address = Marten::DB::Query::SetSpec::Address.create!(street: "Street 2")
+        student = Marten::DB::Query::SetSpec::Student.create!(
+          name: "Student 1",
+          email: "student-1@example.com",
+          address: address,
+          grade: "10"
+        )
+
+        Marten::DB::Query::SetSpec::PersonProfile.create!(person: student)
+        student_profile = Marten::DB::Query::SetSpec::StudentProfile.create!(student: student)
+
+        qset = Marten::DB::Query::Set(Marten::DB::Query::SetSpec::Student).new.order(:id)
+        qset = qset.join(:student_profile)
+
+        qset[0].should eq student
+        qset[0].__set_spec_student_profile.should eq student_profile
+      end
+
+      it "allows to specify inherited one-to-one reverse relations" do
+        address = Marten::DB::Query::SetSpec::Address.create!(street: "Street 2")
+        student = Marten::DB::Query::SetSpec::Student.create!(
+          name: "Student 1",
+          email: "student-1@example.com",
+          address: address,
+          grade: "10"
+        )
+
+        person_profile = Marten::DB::Query::SetSpec::PersonProfile.create!(person: student)
+        Marten::DB::Query::SetSpec::StudentProfile.create!(student: student)
+
+        qset = Marten::DB::Query::Set(Marten::DB::Query::SetSpec::Student).new
+        qset = qset.join(:person_profile)
+
+        qset[0].should eq student
+        qset[0].__set_spec_person_profile.should eq person_profile
+      end
+
+      it "allows to specify both direct and inherited one-to-one reverse relations at the same time" do
+        address = Marten::DB::Query::SetSpec::Address.create!(street: "Street 2")
+        student = Marten::DB::Query::SetSpec::Student.create!(
+          name: "Student 1",
+          email: "student-1@example.com",
+          address: address,
+          grade: "10"
+        )
+
+        person_profile = Marten::DB::Query::SetSpec::PersonProfile.create!(person: student)
+        student_profile = Marten::DB::Query::SetSpec::StudentProfile.create!(student: student)
+
+        qset_1 = Marten::DB::Query::Set(Marten::DB::Query::SetSpec::Student).new
+        qset_1 = qset_1.join(:person_profile, :student_profile)
+
+        qset_1[0].should eq student
+        qset_1[0].__set_spec_person_profile.should eq person_profile
+        qset_1[0].__set_spec_student_profile.should eq student_profile
+
+        qset_2 = Marten::DB::Query::Set(Marten::DB::Query::SetSpec::Student).new
+        qset_2 = qset_2.join(:student_profile, :person_profile)
+
+        qset_2[0].should eq student
+        qset_2[0].__set_spec_person_profile.should eq person_profile
+        qset_2[0].__set_spec_student_profile.should eq student_profile
       end
     end
   end
@@ -1903,6 +2061,17 @@ describe Marten::DB::Query::Set do
           TestUser.filter(pk: -1).pick!([:username])
         end
       end
+    end
+  end
+
+  describe "#pks" do
+    it "extracts the primary keys of the records matched by the considered query set" do
+      test_user_1 = TestUser.create!(username: "jd1", email: "jd1@example.com", first_name: "John", last_name: "Doe")
+      test_user_2 = TestUser.create!(username: "jd2", email: "jd2@example.com", first_name: "John", last_name: "Doe")
+      test_user_3 = TestUser.create!(username: "jd3", email: "jd3@example.com", first_name: "Bob", last_name: "Doe")
+
+      TestUser.all.pks.should eq [test_user_1.pk, test_user_2.pk, test_user_3.pk]
+      TestUser.filter { q(username: "jd1") | q(username: "jd2") }.pks.should eq [test_user_1.pk, test_user_2.pk]
     end
   end
 
@@ -2256,6 +2425,20 @@ describe Marten::DB::Query::Set do
       user_3.last_name.should eq "Abc"
       user_3.is_admin.should be_falsey
     end
+
+    it "resets cached records" do
+      user_1 = TestUser.create!(username: "abc", email: "abc@example.com", first_name: "John", last_name: "Doe")
+      user_2 = TestUser.create!(username: "ghi", email: "ghi@example.com", first_name: "John", last_name: "Bar")
+      TestUser.create!(username: "def", email: "def@example.com", first_name: "Bob", last_name: "Abc")
+
+      qset = Marten::DB::Query::Set(TestUser).new.filter(first_name: "John")
+
+      qset.to_set.should eq(Set{user_1, user_2})
+
+      qset.update(first_name: "Updated", is_admin: true).should eq 2
+
+      qset.to_a.should be_empty
+    end
   end
 
   describe "#using" do
@@ -2279,5 +2462,11 @@ class Post
 
   def __set_spec_updated_by
     @updated_by
+  end
+end
+
+class TestUser
+  def __set_spec_profile
+    @_reverse_o2o_profile
   end
 end

@@ -369,6 +369,45 @@ module Marten
             last.not_nil!
           end
 
+          # Returns a queryset targetting all the records for the considered model with the specified ordering.
+          #
+          # Multiple fields can be specified in order to define the final ordering. For example:
+          #
+          # ```
+          # query_set = Post.order("-published_at", "title")
+          # ```
+          #
+          # In the above example, records would be ordered by descending publication date, and then by title
+          # (ascending).
+          def order(*fields : String | Symbol)
+            default_queryset.order(fields.to_a)
+          end
+
+          # Returns a queryset targetting all the records for the considered model with the specified ordering.
+          #
+          # Multiple fields can be specified in order to define the final ordering. For example:
+          #
+          # ```
+          # query_set = Post.order(["-published_at", "title"])
+          # ```
+          #
+          # In the above example, records would be ordered by descending publication date, and then by title
+          # (ascending).
+          def order(fields : Array(String | Symbol))
+            default_queryset.order(fields.map(&.to_s))
+          end
+
+          # Returns the primary key values of the considered model records.
+          #
+          # This method returns an array containing the primary key values of the model records. For example:
+          #
+          # ```
+          # Post.pks # => [1, 2, 3]
+          # ```
+          def pks
+            pluck(:pk).map(&.first)
+          end
+
           # Returns specific column values without loading entire record objects.
           #
           # This method allows to easily select specific column values from the current query set. This allows

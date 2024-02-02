@@ -93,7 +93,6 @@ module Marten
       end
 
       private def get_expected_token(request)
-        puts "lol"
         token = begin
           if Marten.settings.csrf.use_session
             request.session[Marten.settings.csrf.cookie_name]
@@ -146,7 +145,6 @@ module Marten
         return unless csrf_token && csrf_token_update_required
 
         if Marten.settings.csrf.use_session
-          puts "aasd"
           request.session[Marten.settings.csrf.cookie_name] = csrf_token.not_nil!
         else
           response!.cookies.set(
